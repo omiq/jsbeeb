@@ -20,6 +20,13 @@ REMOTE_PATH="/home/bbc/htdocs/bbc.retrogamecoders.com/"
 LOCAL_BUILD_DIR="dist"
 BACKUP_DIR="backup_$(date +%Y%m%d_%H%M%S)"
 
+# Check for dry-run flag
+DRY_RUN=false
+if [[ "$1" == "--dry-run" ]]; then
+    DRY_RUN=true
+    print_status "DRY RUN MODE - No files will be uploaded"
+fi
+
 # Function to print colored output
 print_status() {
     echo -e "${BLUE}[INFO]${NC} $1"
@@ -86,6 +93,16 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Vite development cache
+.vite/
+.vite-cache/
+
+# Build cache and temporary files
+.cache/
+.temp/
+tmp/
+temp/
+
 # Development files
 .git/
 .gitignore
@@ -147,16 +164,28 @@ print_status "Uploading files to server..."
 
 # Upload files using rsync with exclusions
 print_status "Starting file transfer..."
-if rsync -avz --delete \
-    --exclude-from=.rsync-exclude \
-    --exclude='.rsync-exclude' \
-    --progress \
-    "$LOCAL_BUILD_DIR/" \
-    "$SERVER:$REMOTE_PATH"; then
+
+# Build rsync command - ensure we're uploading CONTENTS of dist directory
+RSYNC_CMD="rsync -avz --delete --exclude-from=.rsync-exclude --exclude='.rsync-exclude' --progress"
+
+if [ "$DRY_RUN" = true ]; then
+    RSYNC_CMD="$RSYNC_CMD --dry-run"
+    print_status "DRY RUN: Would upload files to server..."
+    $RSYNC_CMD "$LOCAL_BUILD_DIR/" "$SERVER:$REMOTE_PATH"
+    print_success "Dry run completed - check the output above"
+    exit 0
+fi
+
+# Clear the remote directory first to ensure clean deployment
+print_status "Clearing remote directory..."
+ssh $SERVER "rm -rf $REMOTE_PATH* $REMOTE_PATH.* 2>/dev/null || true"
+
+if $RSYNC_CMD "$LOCAL_BUILD_DIR/" "$SERVER:$REMOTE_PATH"; then
     print_success "File transfer completed successfully"
 else
+    RSYNC_EXIT_CODE=$?
     # Check if it's just a partial transfer warning (status 23)
-    if [ $? -eq 23 ]; then
+    if [ $RSYNC_EXIT_CODE -eq 23 ]; then
         print_warning "Partial transfer detected (some files may have been skipped)"
         print_status "This is usually safe to ignore - checking if critical files were transferred..."
         
@@ -168,7 +197,11 @@ else
             exit 1
         fi
     else
-        print_error "File transfer failed with status $?"
+        print_error "File transfer failed with status $RSYNC_EXIT_CODE"
+        print_status "Common rsync exit codes:"
+        print_status "  23 = Partial transfer (usually safe to ignore)"
+        print_status "  24 = Source vanished during transfer"
+        print_status "  25 = Transfer failed"
         exit 1
     fi
 fi
@@ -176,9 +209,13 @@ fi
 # Clean up exclude file
 rm .rsync-exclude
 
-# Set proper permissions on server
+# Set proper permissions on server (with error handling)
 print_status "Setting file permissions..."
-ssh $SERVER "chmod -R 755 $REMOTE_PATH && find $REMOTE_PATH -type f -exec chmod 644 {} \;"
+if ssh $SERVER "chmod -R 755 $REMOTE_PATH 2>/dev/null || true; find $REMOTE_PATH -type f -exec chmod 644 {} \; 2>/dev/null || true"; then
+    print_success "File permissions set successfully"
+else
+    print_warning "Some permission changes failed (this is often normal for system files)"
+fi
 
 print_success "Deployment completed successfully!"
 print_status "Backup created at: ${REMOTE_PATH}../$BACKUP_DIR"

@@ -4,16 +4,14 @@ import { defineConfig } from "vitest/config";
 
 /** @type {import("vite").UserConfig} */
 export default defineConfig({
-server: {
-    allowedHosts: true
-  },
+    server: {
+        allowedHosts: ["bbc.retrogamecoders.com", "localhost", "127.0.0.1"],
+        port: 8338,
+    },
     build: {
         sourcemap: true,
         // Prevent inlining; we don't want any worklets/audio workers to be inlined as that doesn't work.
         assetsInlineLimit: 0,
-  server: {
-    port: 8338,
-  },
     },
     test: {
         include: [...configDefaults.include, "tests/unit/**/*.js", "tests/integration/**/*.js"],
